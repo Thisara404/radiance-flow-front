@@ -5,7 +5,7 @@ const Instructor = require('../models/Instructor');
 // @access  Public
 exports.getInstructors = async (req, res) => {
   try {
-    const instructors = await Instructor.find();
+    const instructors = await Instructor.find().sort({ createdAt: -1 });
     
     res.status(200).json({
       success: true,
@@ -113,7 +113,8 @@ exports.deleteInstructor = async (req, res) => {
       });
     }
 
-    await instructor.remove();
+    // Use findByIdAndDelete instead of deprecated remove()
+    await Instructor.findByIdAndDelete(req.params.id);
 
     res.status(200).json({
       success: true,

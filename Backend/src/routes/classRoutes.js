@@ -11,6 +11,9 @@ const {
 } = require("../controllers/classController");
 const { protect, authorize } = require("../middleware/auth");
 
+// Import enrollment controller for class enrollments
+const { getClassEnrollments } = require("../controllers/enrollmentController");
+
 const router = express.Router();
 
 // Public routes
@@ -25,12 +28,13 @@ router.route("/enrolled").get(protect, getEnrolledClasses);
 // Protected routes for students
 router.route("/:id/enroll").post(protect, enrollStudent);
 
-// Admin only routes
-router
-  .route("/:id/students")
-  .get(protect, authorize("admin"), getEnrolledStudents);
+// Admin routes for enrollments - This is the missing route
+router.route("/:id/enrollments").get(protect, authorize("admin"), getClassEnrollments);
 
-// This generic route must come AFTER more specific routes
+// Admin only routes
+router.route("/:id/students").get(protect, authorize("admin"), getEnrolledStudents);
+
+// Generic routes - these must come LAST to avoid conflicts
 router
   .route("/:id")
   .get(getClass)

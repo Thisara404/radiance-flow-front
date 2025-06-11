@@ -6,6 +6,7 @@ import * as instructorService from '../services/instructorService';
 import * as enrollmentService from '../services/enrollmentService';
 import * as eventService from '../services/eventService';
 import * as userService from '../services/userService';
+import * as paymentService from '../services/paymentService';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,9 +14,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
 import Navbar from '../components/Navbar';
-import { Calendar, Home, Contact, Users, BookOpen, ChevronRight, Plus, X } from 'lucide-react';
+import PaymentSlip from '../components/PaymentSlip';
+import { Calendar, Home, Contact, Users, BookOpen, ChevronRight, Plus, X, CreditCard, Receipt, RefreshCw, Eye, DollarSign } from 'lucide-react';
 
 export default function AdminDashboard() {
   const { user } = useAuth();
@@ -28,12 +31,26 @@ export default function AdminDashboard() {
     totalStudents: 0,
     totalInstructors: 0,
     activeClasses: 0,
-    pendingBookings: 0
+    pendingBookings: 0,
+    totalRevenue: 0,
+    monthlyRevenue: 0,
+    pendingPayments: 0,
+    completedPayments: 0
   });
+  
   const [students, setStudents] = useState([]);
   const [instructors, setInstructors] = useState([]);
   const [classes, setClasses] = useState([]);
   const [events, setEvents] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [paymentStats, setPaymentStats] = useState(null);
+  
+  // Payment state
+  const [selectedPayment, setSelectedPayment] = useState(null);
+  const [showPaymentSlip, setShowPaymentSlip] = useState(false);
+  const [refundModalOpen, setRefundModalOpen] = useState(false);
+  const [refundReason, setRefundReason] = useState('');
+  const [refundingPayment, setRefundingPayment] = useState(null);
   
   // State for new instructor form
   const [newInstructor, setNewInstructor] = useState({
@@ -49,7 +66,7 @@ export default function AdminDashboard() {
     level: 'Beginner',
     instructor: '',
     schedule: '',
-    duration: '',
+    duration: '60 min',
     price: '',
     description: '',
     capacity: 20
@@ -65,7 +82,7 @@ export default function AdminDashboard() {
     venue: '',
     description: '',
     price: '',
-    category: 'Recital',
+    category: 'Dance choreography',
     expectedGuests: 0
   });
 
@@ -80,6 +97,9 @@ export default function AdminDashboard() {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [registrationModalOpen, setRegistrationModalOpen] = useState(false);
 
+  // Add state for editing events
+  const [editingEvent, setEditingEvent] = useState(null);
+  
   // Load data from backend
   useEffect(() => {
     const fetchData = async () => {
@@ -87,55 +107,33 @@ export default function AdminDashboard() {
         setIsLoading(true);
         setLoadingError(null);
         
-        // Fetch instructors
-        let instructorsData = [];
-        try {
-          const instructorsResponse = await instructorService.getAllInstructors();
-          instructorsData = instructorsResponse.data || [];
-        } catch (error) {
-          console.error('Error fetching instructors:', error);
-          instructorsData = [];
-        }
+        // Fetch all data
+        await Promise.all([
+          fetchInstructors(),
+          fetchClassesWithEnrollments(),
+          fetchEvents(),
+          fetchStudents(),
+          fetchPayments(),
+          fetchPaymentStats()
+        ]);
         
-        // Fetch classes
-        let classesData = [];
-        try {
-          const classesResponse = await classService.getAllClasses();
-          classesData = classesResponse.data || [];
-        } catch (error) {
-          console.error('Error fetching classes:', error);
-          classesData = [];
-        }
-        
-        // Fetch events
-        let eventsData = [];
-        try {
-          const eventsResponse = await eventService.getAllEvents();
-          eventsData = eventsResponse.data || [];
-        } catch (error) {
-          console.error('Error fetching events:', error);
-          eventsData = [];
-        }
-        
-        // Fetch users
-        let usersData = [];
-        try {
-          const usersResponse = await userService.getAllUsers();
-          usersData = usersResponse.data || [];
-        } catch (error) {
-          console.error('Error fetching users:', error);
-          usersData = [];
-        }
+        setIsLoading(false);
+      } catch (error) {
+        console.error('Error fetching admin data:', error);
+        setLoadingError('Failed to load dashboard data');
+        setIsLoading(false);
+      }
+    };
 
-        // Set statistics
-        setStats({
-          totalStudents: usersData.filter(user => user.role === 'student').length,
-          totalInstructors: instructorsData.length,
-          activeClasses: classesData.length,
-          pendingBookings: eventsData.filter(event => event.status === 'Pending').length
-        });
+    fetchData();
+  }, []);
 
-        // Format instructors data
+  const fetchInstructors = async () => {
+    try {
+      const instructorsResponse = await instructorService.getAllInstructors();
+      if (instructorsResponse.success) {
+        const instructorsData = instructorsResponse.data || [];
+        
         setInstructors(instructorsData.map(instructor => ({
           id: instructor._id,
           name: instructor.name,
@@ -144,72 +142,18 @@ export default function AdminDashboard() {
           bio: instructor.bio || '',
           classes: instructor.classes?.length || 0
         })));
-
-        // Format classes data
-        setClasses(classesData.map(cls => ({
-          id: cls._id,
-          name: cls.name,
-          instructor: cls.instructor?.name || 'Unassigned',
-          instructorId: cls.instructor?._id,
-          level: cls.level,
-          schedule: cls.schedule,
-          duration: cls.duration,
-          price: cls.price,
-          description: cls.description || '',
-          capacity: cls.capacity,
-          enrolled: cls.enrolledStudents?.length || 0,
-          spots: (cls.capacity - (cls.enrolledStudents?.length || 0)) || cls.capacity
-        })));
-
-        // Format events data
-        setEvents(eventsData.map(event => ({
-          id: event._id,
-          eventType: event.eventType,
-          title: event.title || event.eventType,
-          date: new Date(event.date).toLocaleDateString(),
-          time: event.time,
-          venue: event.venue,
-          organizer: event.contactPerson,
-          contactEmail: event.contactEmail,
-          description: event.description || '',
-          status: event.status
-        })));
-
-        // Format students data
-        setStudents(usersData
-          .filter(user => user.role === 'student')
-          .map(student => ({
-            id: student._id,
-            name: student.name,
-            email: student.email,
-            joinDate: new Date(student.createdAt).toLocaleDateString(),
-            status: 'Active'
-          }))
-        );
-
-        setIsLoading(false);
-      } catch (error) {
-        console.error('Error fetching admin data:', error);
-        setLoadingError('Failed to load dashboard data. Please try again later.');
-        toast({
-          title: 'Error',
-          description: 'Failed to load dashboard data',
-          variant: 'destructive'
-        });
-        setIsLoading(false);
       }
-    };
+    } catch (error) {
+      console.error('Error fetching instructors:', error);
+    }
+  };
 
-    fetchData();
-  }, []);
-
-  // Fetch classes with enrollments
   const fetchClassesWithEnrollments = async () => {
     try {
-      const classesResponse = await classService.getAllClasses(true);
+      const classesResponse = await classService.getAllClasses();
+      const classesData = classesResponse.data || [];
       
-      // Format classes data with enrollment info
-      setClasses(classesResponse.data.map(cls => ({
+      setClasses(classesData.map(cls => ({
         id: cls._id,
         name: cls.name,
         instructor: cls.instructor?.name || 'Unassigned',
@@ -220,13 +164,183 @@ export default function AdminDashboard() {
         price: cls.price,
         description: cls.description || '',
         capacity: cls.capacity,
-        enrolled: cls.enrolledCount || 0,
-        spots: cls.availableSpots || cls.capacity,
-        // Store enrollments separately if they exist
-        enrollments: cls.enrollments || []
+        enrolled: cls.enrolledStudents?.length || 0,
+        spots: (cls.capacity - (cls.enrolledStudents?.length || 0)) || cls.capacity
       })));
     } catch (error) {
-      console.error('Error fetching classes with enrollments:', error);
+      console.error('Error fetching classes:', error);
+    }
+  };
+
+  const fetchEvents = async () => {
+    try {
+      const eventsResponse = await eventService.getAllEvents();
+      const eventsData = eventsResponse.data || [];
+      
+      setEvents(eventsData.map(event => ({
+        id: event._id,
+        eventType: event.eventType,
+        title: event.title || event.eventType,
+        date: new Date(event.date).toLocaleDateString(),
+        time: event.time,
+        venue: event.venue,
+        organizer: event.contactPerson,
+        contactEmail: event.contactEmail,
+        description: event.description || '',
+        status: event.status,
+        category: event.category || 'Dance choreography',
+        price: event.price || 'Free'
+      })));
+    } catch (error) {
+      console.error('Error fetching events:', error);
+    }
+  };
+
+  const fetchStudents = async () => {
+    try {
+      const studentsResponse = await userService.getAllUsers();
+      if (studentsResponse.success) {
+        const usersData = studentsResponse.data || [];
+        
+        setStudents(usersData
+          .filter(user => user.role === 'student')
+          .map(student => ({
+            id: student._id,
+            name: student.name,
+            email: student.email,
+            joinDate: new Date(student.createdAt).toLocaleDateString(),
+            status: 'Active'
+          }))
+        );
+      }
+    } catch (error) {
+      console.error('Error fetching students:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to load students data',
+        variant: 'destructive'
+      });
+    }
+  };
+
+  const fetchPayments = async () => {
+    try {
+      const paymentsResponse = await paymentService.getAllPayments();
+      if (paymentsResponse.success) {
+        setPayments(paymentsResponse.data || []);
+        
+        // Update stats with payment data
+        if (paymentsResponse.stats) {
+          const paymentStats = paymentsResponse.stats;
+          setStats(prev => ({
+            ...prev,
+            totalRevenue: paymentStats.completedAmount || 0,
+            monthlyRevenue: paymentStats.totalAmount || 0,
+            completedPayments: paymentsResponse.data?.filter(p => p.status === 'completed').length || 0,
+            pendingPayments: paymentsResponse.data?.filter(p => p.status === 'pending').length || 0
+          }));
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching payments:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to load payments data',
+        variant: 'destructive'
+      });
+    }
+  };
+
+  const fetchPaymentStats = async () => {
+    try {
+      const statsResponse = await paymentService.getPaymentStats();
+      if (statsResponse.success) {
+        setPaymentStats(statsResponse.data);
+      }
+    } catch (error) {
+      console.error('Error fetching payment stats:', error);
+    }
+  };
+
+  // Update stats when data changes
+  useEffect(() => {
+    const currentDate = new Date();
+    const currentMonth = currentDate.getMonth();
+    const currentYear = currentDate.getFullYear();
+    
+    const monthlyPayments = payments.filter(p => {
+      const paymentDate = new Date(p.createdAt);
+      return paymentDate.getMonth() === currentMonth 
+        && paymentDate.getFullYear() === currentYear 
+        && p.status === 'completed';
+    });
+
+    setStats(prev => ({
+      ...prev,
+      totalStudents: students.length,
+      totalInstructors: instructors.length,
+      activeClasses: classes.length,
+      pendingBookings: events.filter(e => e.status === 'Pending').length,
+      monthlyRevenue: monthlyPayments.reduce((sum, p) => sum + (p.amountLKR || 0), 0)
+    }));
+  }, [students, instructors, classes, events, payments]);
+
+  // Payment handlers
+  const handleViewPaymentSlip = async (paymentId) => {
+    try {
+      const response = await paymentService.getPaymentSlip(paymentId);
+      if (response.success) {
+        setSelectedPayment(response.data);
+        setShowPaymentSlip(true);
+      }
+    } catch (error) {
+      console.error('Error fetching payment slip:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to load payment slip',
+        variant: 'destructive'
+      });
+    }
+  };
+
+  const handleRefundPayment = async () => {
+    if (!refundingPayment || !refundReason.trim()) {
+      toast({
+        title: 'Error',
+        description: 'Please provide a refund reason',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    try {
+      const response = await paymentService.refundPayment(refundingPayment._id, refundReason);
+      if (response.success) {
+        // Update payments list
+        setPayments(payments.map(p => 
+          p._id === refundingPayment._id 
+            ? { ...p, status: 'refunded', refundAmount: p.amountLKR, refundDate: new Date(), refundReason }
+            : p
+        ));
+        
+        setRefundModalOpen(false);
+        setRefundingPayment(null);
+        setRefundReason('');
+        
+        toast({
+          title: 'Success',
+          description: 'Payment refunded successfully'
+        });
+      } else {
+        throw new Error(response.message || 'Refund failed');
+      }
+    } catch (error) {
+      console.error('Error processing refund:', error);
+      toast({
+        title: 'Error',
+        description: error.response?.data?.message || error.message || 'Failed to process refund',
+        variant: 'destructive'
+      });
     }
   };
 
@@ -262,12 +376,6 @@ export default function AdminDashboard() {
           classes: 0
         }
       ]);
-      
-      // Update stats
-      setStats({
-        ...stats,
-        totalInstructors: stats.totalInstructors + 1
-      });
       
       // Clear form
       setNewInstructor({
@@ -307,15 +415,6 @@ export default function AdminDashboard() {
     
     // Validate description length
     if (newClass.description && newClass.description.length > 500) {
-      toast({
-        title: "Error",
-        description: "Description cannot be more than 500 characters",
-        variant: "destructive"
-      });
-      // Option 1: Return and don't submit
-      // return;
-      
-      // Option 2: Trim the description and continue
       newClass.description = newClass.description.substring(0, 500);
       toast({
         title: "Warning",
@@ -379,103 +478,145 @@ export default function AdminDashboard() {
   const handleCreateEvent = async (e) => {
     e.preventDefault();
     
+    // Validate required fields
     if (!newEvent.eventType || !newEvent.title || !newEvent.date || !newEvent.time || !newEvent.venue) {
       toast({
         title: 'Validation Error',
-        description: 'Please fill in all required fields',
+        description: 'Please fill in all required fields (Event Type, Title, Date, Time, Venue)',
         variant: 'destructive'
       });
       return;
     }
     
     try {
+      // Format the event data properly
       const formattedEvent = {
-        ...newEvent,
-        contactPerson: user?.name,
-        contactEmail: user?.email,
+        eventType: newEvent.eventType,
+        title: newEvent.title,
+        date: newEvent.date,
+        time: newEvent.time,
+        venue: newEvent.venue,
+        duration: newEvent.duration || '',
+        description: newEvent.description || '',
+        price: newEvent.price || '0',
+        category: newEvent.category || 'Dance choreography',
+        expectedGuests: parseInt(newEvent.expectedGuests) || 0,
+        contactPerson: user?.name || 'Admin',
+        contactEmail: user?.email || 'admin@radiancedance.com',
         status: 'Approved' // Auto-approve admin-created events
       };
+
+      console.log('Sending event data:', formattedEvent);
       
-      const response = await eventService.createEvent(formattedEvent);
+      let response;
       
-      if (!response.success) {
-        throw new Error(response.message || 'Failed to create event');
+      // Check if we're editing or creating
+      if (editingEvent) {
+        response = await eventService.updateEvent(editingEvent.id, formattedEvent);
+      } else {
+        response = await eventService.createEvent(formattedEvent);
       }
       
-      // Add to events list
-      setEvents([
-        ...events,
-        {
-          id: response.data._id,
-          eventType: response.data.eventType,
-          title: response.data.title,
-          date: new Date(response.data.date).toLocaleDateString(),
-          time: response.data.time,
-          venue: response.data.venue,
-          organizer: response.data.contactPerson,
-          contactEmail: response.data.contactEmail,
-          description: response.data.description || '',
-          status: response.data.status,
-          category: response.data.category || 'Recital',
-          price: response.data.price || 'Free'
+      if (response.success) {
+        if (editingEvent) {
+          // Update existing event in the list
+          setEvents(events.map(event => 
+            event.id === editingEvent.id 
+              ? {
+                  ...event,
+                  eventType: response.data.eventType,
+                  title: response.data.title,
+                  date: new Date(response.data.date).toLocaleDateString(),
+                  time: response.data.time,
+                  venue: response.data.venue,
+                  organizer: response.data.contactPerson,
+                  contactEmail: response.data.contactEmail,
+                  description: response.data.description || '',
+                  status: response.data.status,
+                  category: response.data.category || 'Dance choreography',
+                  price: response.data.price || 'Free'
+                }
+              : event
+          ));
+          
+          toast({
+            title: 'Success',
+            description: 'Event updated successfully',
+          });
+        } else {
+          // Add new event to the list
+          setEvents([
+            ...events,
+            {
+              id: response.data._id,
+              eventType: response.data.eventType,
+              title: response.data.title,
+              date: new Date(response.data.date).toLocaleDateString(),
+              time: response.data.time,
+              venue: response.data.venue,
+              organizer: response.data.contactPerson,
+              contactEmail: response.data.contactEmail,
+              description: response.data.description || '',
+              status: response.data.status,
+              category: response.data.category || 'Dance choreography',
+              price: response.data.price || 'Free'
+            }
+          ]);
+          
+          toast({
+            title: 'Success',
+            description: 'Event created successfully',
+          });
         }
-      ]);
-      
-      // Clear form
-      setNewEvent({
-        eventType: '',
-        title: '',
-        date: '',
-        time: '',
-        duration: '',
-        venue: '',
-        description: '',
-        price: '',
-        category: 'Recital',
-        expectedGuests: 0
-      });
-      
-      // Close modal
-      setEventModalOpen(false);
-      
-      // Show success message
-      toast({
-        title: 'Success',
-        description: 'Event created successfully',
-      });
+        
+        // Clear form and reset editing state
+        setNewEvent({
+          eventType: '',
+          title: '',
+          date: '',
+          time: '',
+          duration: '',
+          venue: '',
+          description: '',
+          price: '',
+          category: 'Dance choreography',
+          expectedGuests: 0
+        });
+        
+        setEditingEvent(null);
+        setEventModalOpen(false);
+      } else {
+        throw new Error(response.message || 'Failed to save event');
+      }
     } catch (error) {
-      console.error('Error creating event:', error);
+      console.error('Error saving event:', error);
       toast({
         title: 'Error',
-        description: error.message || 'Failed to create event',
+        description: error.response?.data?.message || error.message || 'Failed to save event',
         variant: 'destructive'
       });
     }
   };
 
-  // Handler for updating event status
-  const handleUpdateEventStatus = async (eventId, newStatus) => {
-    try {
-      await eventService.updateEventStatus(eventId, newStatus);
-      
-      // Update events list
-      setEvents(events.map(event => 
-        event.id === eventId ? { ...event, status: newStatus } : event
-      ));
-      
-      // Show success message
-      toast({
-        title: 'Success',
-        description: `Event status updated to ${newStatus}`,
-      });
-    } catch (error) {
-      console.error('Error updating event status:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to update event status',
-        variant: 'destructive'
-      });
-    }
+  // Add function to handle editing
+  const handleEditEvent = (event) => {
+    setEditingEvent(event);
+    
+    // Populate form with event data
+    setNewEvent({
+      eventType: event.eventType,
+      title: event.title,
+      date: new Date(event.date).toISOString().split('T')[0], // Format for date input
+      time: event.time,
+      duration: event.duration || '',
+      venue: event.venue,
+      description: event.description || '',
+      price: event.price === 'Free' ? '' : event.price,
+      category: event.category || 'Dance choreography',
+      expectedGuests: event.expectedGuests || 0
+    });
+    
+    setEventModalOpen(true);
   };
 
   // Handler to view class enrollments
@@ -556,13 +697,18 @@ export default function AdminDashboard() {
     switch (status) {
       case 'Active':
       case 'Approved':
+      case 'completed':
         return 'bg-green-100 text-green-800';
       case 'Pending':
       case 'Under Review':
+      case 'pending':
         return 'bg-yellow-100 text-yellow-800';
       case 'Inactive':
       case 'Rejected':
+      case 'failed':
         return 'bg-red-100 text-red-800';
+      case 'refunded':
+        return 'bg-gray-100 text-gray-800';
       default:
         return 'bg-gray-100 text-gray-800';
     }
@@ -580,29 +726,91 @@ export default function AdminDashboard() {
         return (
           <div className="space-y-6">
             {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <Card className="bg-gradient-to-r from-purple-500 to-purple-600 text-white">
                 <CardContent className="p-6">
-                  <div className="text-2xl font-bold">{stats.totalStudents}</div>
-                  <div className="text-purple-100">Total Students</div>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-2xl font-bold">{stats.totalStudents}</div>
+                      <div className="text-purple-100">Total Students</div>
+                    </div>
+                    <Users className="text-purple-200" size={32} />
+                  </div>
                 </CardContent>
               </Card>
+              
               <Card className="bg-gradient-to-r from-pink-500 to-pink-600 text-white">
                 <CardContent className="p-6">
-                  <div className="text-2xl font-bold">{stats.totalInstructors}</div>
-                  <div className="text-pink-100">Instructors</div>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-2xl font-bold">{stats.totalInstructors}</div>
+                      <div className="text-pink-100">Instructors</div>
+                    </div>
+                    <Contact className="text-pink-200" size={32} />
+                  </div>
                 </CardContent>
               </Card>
+              
               <Card className="bg-gradient-to-r from-orange-500 to-orange-600 text-white">
                 <CardContent className="p-6">
-                  <div className="text-2xl font-bold">{stats.activeClasses}</div>
-                  <div className="text-orange-100">Active Classes</div>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-2xl font-bold">{stats.activeClasses}</div>
+                      <div className="text-orange-100">Active Classes</div>
+                    </div>
+                    <BookOpen className="text-orange-200" size={32} />
+                  </div>
                 </CardContent>
               </Card>
+              
+              <Card className="bg-gradient-to-r from-green-500 to-green-600 text-white">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-2xl font-bold">Rs. {stats.totalRevenue.toLocaleString()}</div>
+                      <div className="text-green-100">Total Revenue</div>
+                    </div>
+                    <DollarSign className="text-green-200" size={32} />
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Payment Stats Row */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card className="bg-gradient-to-r from-blue-500 to-blue-600 text-white">
                 <CardContent className="p-6">
-                  <div className="text-2xl font-bold">{stats.pendingBookings}</div>
-                  <div className="text-blue-100">Pending Bookings</div>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-2xl font-bold">Rs. {stats.monthlyRevenue.toLocaleString()}</div>
+                      <div className="text-blue-100">Monthly Revenue</div>
+                    </div>
+                    <Calendar className="text-blue-200" size={32} />
+                  </div>
+                </CardContent>
+              </Card>
+              
+              <Card className="bg-gradient-to-r from-indigo-500 to-indigo-600 text-white">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-2xl font-bold">{stats.completedPayments}</div>
+                      <div className="text-indigo-100">Completed Payments</div>
+                    </div>
+                    <Receipt className="text-indigo-200" size={32} />
+                  </div>
+                </CardContent>
+              </Card>
+              
+              <Card className="bg-gradient-to-r from-yellow-500 to-yellow-600 text-white">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-2xl font-bold">{stats.pendingPayments}</div>
+                      <div className="text-yellow-100">Pending Payments</div>
+                    </div>
+                    <CreditCard className="text-yellow-200" size={32} />
+                  </div>
                 </CardContent>
               </Card>
             </div>
@@ -613,7 +821,7 @@ export default function AdminDashboard() {
                 <CardTitle>Quick Actions</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <Button 
                     onClick={() => setActiveTab('instructors')} 
                     className="h-20 flex flex-col items-center justify-center bg-gradient-to-r from-purple-600 to-pink-600"
@@ -635,7 +843,15 @@ export default function AdminDashboard() {
                     variant="outline"
                   >
                     <BookOpen className="mb-2" size={24} />
-                    Review Event Bookings
+                    Manage Events
+                  </Button>
+                  <Button 
+                    onClick={() => setActiveTab('payments')}
+                    className="h-20 flex flex-col items-center justify-center" 
+                    variant="outline"
+                  >
+                    <CreditCard className="mb-2" size={24} />
+                    View Payments
                   </Button>
                 </div>
               </CardContent>
@@ -646,14 +862,14 @@ export default function AdminDashboard() {
               {/* Today's Classes */}
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
-                  <CardTitle className="text-lg">Today's Classes</CardTitle>
+                  <CardTitle className="text-lg">Active Classes</CardTitle>
                   <Button variant="ghost" size="sm" onClick={() => setActiveTab('classes')} className="flex items-center">
                     View all <ChevronRight size={16} className="ml-1" />
                   </Button>
                 </CardHeader>
                 <CardContent>
                   {classes.length === 0 ? (
-                    <div className="text-center text-gray-500 py-4">No classes scheduled for today</div>
+                    <div className="text-center text-gray-500 py-4">No classes created yet</div>
                   ) : (
                     <div className="space-y-3">
                       {classes.slice(0, 3).map((cls) => (
@@ -672,28 +888,30 @@ export default function AdminDashboard() {
                 </CardContent>
               </Card>
 
-              {/* Recent Bookings */}
+              {/* Recent Payments */}
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
-                  <CardTitle className="text-lg">Recent Events</CardTitle>
-                  <Button variant="ghost" size="sm" onClick={() => setActiveTab('events')} className="flex items-center">
+                  <CardTitle className="text-lg">Recent Payments</CardTitle>
+                  <Button variant="ghost" size="sm" onClick={() => setActiveTab('payments')} className="flex items-center">
                     View all <ChevronRight size={16} className="ml-1" />
                   </Button>
                 </CardHeader>
                 <CardContent>
-                  {events.length === 0 ? (
-                    <div className="text-center text-gray-500 py-4">No events created yet</div>
+                  {payments.length === 0 ? (
+                    <div className="text-center text-gray-500 py-4">No payments yet</div>
                   ) : (
                     <div className="space-y-3">
-                      {events.slice(0, 3).map((event) => (
-                        <div key={event.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                      {payments.slice(0, 3).map((payment) => (
+                        <div key={payment._id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
                           <div>
-                            <div className="font-medium">{event.title || event.eventType}</div>
-                            <div className="text-sm text-gray-600">{event.date} • {event.time}</div>
+                            <div className="font-medium">Rs. {payment.amountLKR?.toLocaleString()}</div>
+                            <div className="text-sm text-gray-600">
+                              {payment.user?.name} • {payment.itemType}
+                            </div>
                           </div>
-                          <span className={`px-2 py-1 rounded text-xs ${getStatusColor(event.status)}`}>
-                            {event.status}
-                          </span>
+                          <Badge className={getStatusColor(payment.status)}>
+                            {payment.status}
+                          </Badge>
                         </div>
                       ))}
                     </div>
@@ -701,6 +919,133 @@ export default function AdminDashboard() {
                 </CardContent>
               </Card>
             </div>
+          </div>
+        );
+
+      case 'payments':
+        return (
+          <div className="space-y-6">
+            {/* Payment Statistics */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <Card>
+                <CardContent className="p-6">
+                  <div className="text-2xl font-bold text-green-600">
+                    Rs. {payments.filter(p => p.status === 'completed').reduce((sum, p) => sum + (p.amountLKR || 0), 0).toLocaleString()}
+                  </div>
+                  <div className="text-gray-600">Completed Payments</div>
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardContent className="p-6">
+                  <div className="text-2xl font-bold text-yellow-600">
+                    Rs. {payments.filter(p => p.status === 'pending').reduce((sum, p) => sum + (p.amountLKR || 0), 0).toLocaleString()}
+                  </div>
+                  <div className="text-gray-600">Pending Payments</div>
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardContent className="p-6">
+                  <div className="text-2xl font-bold text-red-600">
+                    Rs. {payments.filter(p => p.status === 'refunded').reduce((sum, p) => sum + (p.refundAmount || 0), 0).toLocaleString()}
+                  </div>
+                  <div className="text-gray-600">Refunded Amount</div>
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardContent className="p-6">
+                  <div className="text-2xl font-bold text-blue-600">{payments.length}</div>
+                  <div className="text-gray-600">Total Transactions</div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Payments List */}
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>All Payments</CardTitle>
+                <Button onClick={() => fetchPayments()} variant="outline" size="sm">
+                  <RefreshCw size={16} className="mr-2" />
+                  Refresh
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {payments.length === 0 ? (
+                  <div className="text-center text-gray-500 py-8">No payments found</div>
+                ) : (
+                  <div className="space-y-4">
+                    {payments.map((payment) => (
+                      <div key={payment._id} className="border rounded-lg p-4">
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <div className="flex items-center space-x-3 mb-2">
+                              <h3 className="font-semibold text-lg">Rs. {payment.amountLKR?.toLocaleString()}</h3>
+                              <Badge className={getStatusColor(payment.status)}>
+                                {payment.status.toUpperCase()}
+                              </Badge>
+                            </div>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-600">
+                              <div>
+                                <p><strong>Customer:</strong> {payment.user?.name || 'N/A'}</p>
+                                <p><strong>Email:</strong> {payment.user?.email || 'N/A'}</p>
+                                <p><strong>Transaction ID:</strong> {payment.paypalCaptureId || payment.paypalOrderId || 'N/A'}</p>
+                              </div>
+                              <div>
+                                <p><strong>Type:</strong> {payment.itemType}</p>
+                                <p><strong>Item:</strong> {payment.itemId?.name || payment.description || 'N/A'}</p>
+                                <p><strong>Date:</strong> {new Date(payment.createdAt).toLocaleDateString()}</p>
+                                <p><strong>USD Amount:</strong> ${payment.amount}</p>
+                              </div>
+                            </div>
+
+                            {payment.status === 'refunded' && (
+                              <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded">
+                                <p className="text-red-800 text-sm">
+                                  <strong>Refunded:</strong> Rs. {payment.refundAmount?.toLocaleString()} on {new Date(payment.refundDate).toLocaleDateString()}
+                                </p>
+                                {payment.refundReason && (
+                                  <p className="text-red-700 text-sm mt-1">
+                                    <strong>Reason:</strong> {payment.refundReason}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          
+                          <div className="flex flex-col space-y-2 ml-4">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleViewPaymentSlip(payment._id)}
+                            >
+                              <Eye size={14} className="mr-1" />
+                              View Receipt
+                            </Button>
+                            
+                            {payment.status === 'completed' && payment.canRefund && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-red-600 border-red-300 hover:bg-red-50"
+                                onClick={() => {
+                                  setRefundingPayment(payment);
+                                  setRefundModalOpen(true);
+                                }}
+                              >
+                                Process Refund
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </div>
         );
 
@@ -927,7 +1272,7 @@ export default function AdminDashboard() {
                         id="price" 
                         value={newClass.price} 
                         onChange={(e) => handleInputChange(setNewClass, newClass, 'price', e.target.value)}
-                        placeholder="E.g., $120/month"
+                        placeholder="E.g., 12000"
                         required
                       />
                     </div>
@@ -953,7 +1298,7 @@ export default function AdminDashboard() {
                       className="mt-1 p-2 w-full border rounded-md"
                       placeholder="Class description"
                       rows={4}
-                      maxLength={500} // Add maxLength attribute
+                      maxLength={500}
                     ></textarea>
                     <div className="mt-1 text-xs text-gray-500 flex justify-end">
                       {newClass.description?.length || 0}/500 characters
@@ -991,6 +1336,7 @@ export default function AdminDashboard() {
                           <p className="text-sm text-gray-600">Instructor: {cls.instructor}</p>
                           <p className="text-sm text-gray-600">Schedule: {cls.schedule}</p>
                           <p className="text-sm text-gray-600">Level: {cls.level}</p>
+                          <p className="text-sm text-gray-600">Price: Rs. {cls.price?.toLocaleString()}</p>
                         </div>
                         <div className="flex flex-col items-end">
                           <div className="text-center mb-2">
@@ -1077,7 +1423,22 @@ export default function AdminDashboard() {
             <div className="flex justify-between">
               <h2 className="text-2xl font-bold">Event Management</h2>
               <Button 
-                onClick={() => setEventModalOpen(true)}
+                onClick={() => {
+                  setEditingEvent(null);
+                  setNewEvent({
+                    eventType: '',
+                    title: '',
+                    date: '',
+                    time: '',
+                    duration: '',
+                    venue: '',
+                    description: '',
+                    price: '',
+                    category: 'Dance choreography',
+                    expectedGuests: 0
+                  });
+                  setEventModalOpen(true);
+                }}
                 className="bg-gradient-to-r from-purple-600 to-pink-600"
               >
                 <Plus className="mr-2" size={16} />
@@ -1134,23 +1495,7 @@ export default function AdminDashboard() {
                             <Button 
                               variant="outline" 
                               size="sm"
-                              onClick={() => {
-                                // Edit event functionality
-                                const eventToEdit = { ...event };
-                                setNewEvent({
-                                  eventType: eventToEdit.eventType,
-                                  title: eventToEdit.title || '',
-                                  date: new Date(eventToEdit.date).toISOString().split('T')[0],
-                                  time: eventToEdit.time,
-                                  duration: eventToEdit.duration || '',
-                                  venue: eventToEdit.venue,
-                                  description: eventToEdit.description || '',
-                                  price: eventToEdit.price || '',
-                                  category: eventToEdit.category || 'Recital',
-                                  expectedGuests: eventToEdit.expectedGuests || 0
-                                });
-                                setEventModalOpen(true);
-                              }}
+                              onClick={() => handleEditEvent(event)}
                             >
                               Edit
                             </Button>
@@ -1203,7 +1548,10 @@ export default function AdminDashboard() {
             <Dialog open={eventModalOpen} onOpenChange={setEventModalOpen}>
               <DialogContent className="max-w-2xl">
                 <DialogHeader>
-                  <DialogTitle>Create New Event</DialogTitle>
+                  <DialogTitle>{editingEvent ? 'Edit Event' : 'Create New Event'}</DialogTitle>
+                  <DialogDescription>
+                    {editingEvent ? 'Update the event details below.' : 'Fill in the details below to create a new event for the academy.'}
+                  </DialogDescription>
                 </DialogHeader>
                 <form onSubmit={handleCreateEvent} className="space-y-4 mt-4">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1420,6 +1768,12 @@ export default function AdminDashboard() {
               className={`flex-1 ${activeTab === 'events' ? 'bg-purple-600 text-white' : 'bg-white text-gray-800'}`}
             >
               Events
+            </Button>
+            <Button 
+              onClick={() => setActiveTab('payments')} 
+              className={`flex-1 ${activeTab === 'payments' ? 'bg-purple-600 text-white' : 'bg-white text-gray-800'}`}
+            >
+              Payments
             </Button>
           </div>
         </div>

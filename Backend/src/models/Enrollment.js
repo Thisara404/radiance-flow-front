@@ -28,6 +28,8 @@ const EnrollmentSchema = new mongoose.Schema({
   notes: {
     type: String
   }
+}, {
+  timestamps: true
 });
 
 // Prevent duplicate enrollments

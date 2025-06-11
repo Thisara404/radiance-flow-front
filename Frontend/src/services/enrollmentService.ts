@@ -22,10 +22,13 @@ export const getMyEnrollments = async () => {
 
 export const getClassEnrollments = async (classId: string) => {
   try {
+    console.log('Fetching enrollments for class:', classId);
     const response = await api.get(`/classes/${classId}/enrollments`);
+    console.log('Enrollments response:', response.data);
     return response.data;
   } catch (error) {
     console.error('Error fetching class enrollments:', error);
+    console.error('Error details:', error.response?.data);
     throw error;
   }
 };

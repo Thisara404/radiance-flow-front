@@ -53,16 +53,40 @@ exports.getEvent = async (req, res) => {
 // @access  Private
 exports.createEvent = async (req, res) => {
   try {
-    // Add user to req.body
-    req.body.organizer = req.user.id;
+    console.log('Creating event with data:', req.body);
+    
+    // Validate required fields
+    const requiredFields = ['eventType', 'date', 'time', 'venue'];
+    const missingFields = requiredFields.filter(field => !req.body[field]);
+    
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Missing required fields: ${missingFields.join(', ')}`
+      });
+    }
 
-    const event = await Event.create(req.body);
+    // Set default values for optional fields
+    const eventData = {
+      ...req.body,
+      organizer: req.user.id,
+      contactPerson: req.body.contactPerson || req.user.name,
+      contactEmail: req.body.contactEmail || req.user.email,
+      title: req.body.title || req.body.eventType,
+      category: req.body.category || 'Dance choreography',
+      status: req.body.status || 'Approved', // Auto-approve admin events
+      expectedGuests: parseInt(req.body.expectedGuests) || 0,
+      price: req.body.price || '0'
+    };
+
+    const event = await Event.create(eventData);
 
     res.status(201).json({
       success: true,
       data: event
     });
   } catch (error) {
+    console.error('Error creating event:', error);
     res.status(400).json({
       success: false,
       message: error.message
@@ -75,6 +99,9 @@ exports.createEvent = async (req, res) => {
 // @access  Private
 exports.updateEvent = async (req, res) => {
   try {
+    console.log('Updating event with ID:', req.params.id);
+    console.log('Update data:', req.body);
+    
     let event = await Event.findById(req.params.id);
 
     if (!event) {
@@ -92,16 +119,20 @@ exports.updateEvent = async (req, res) => {
       });
     }
 
+    // Update the event
     event = await Event.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true
     });
+
+    console.log('Event updated successfully:', event._id);
 
     res.status(200).json({
       success: true,
       data: event
     });
   } catch (error) {
+    console.error('Error updating event:', error);
     res.status(400).json({
       success: false,
       message: error.message
@@ -123,7 +154,7 @@ exports.deleteEvent = async (req, res) => {
       });
     }
 
-    // Make sure user is event organizer or admin
+    // Check if user is authorized to delete this event
     if (event.organizer.toString() !== req.user.id && req.user.role !== 'admin') {
       return res.status(401).json({
         success: false,
@@ -131,13 +162,18 @@ exports.deleteEvent = async (req, res) => {
       });
     }
 
-    await event.remove();
+    // Delete related event registrations first
+    await EventRegistration.deleteMany({ event: req.params.id });
+
+    // Use deleteOne() instead of remove()
+    await Event.findByIdAndDelete(req.params.id);
 
     res.status(200).json({
       success: true,
       data: {}
     });
   } catch (error) {
+    console.error('Error deleting event:', error);
     res.status(400).json({
       success: false,
       message: error.message

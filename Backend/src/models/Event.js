@@ -5,7 +5,10 @@ const EventSchema = new mongoose.Schema({
     type: String,
     required: [true, "Please add an event type"],
   },
-  title: String,
+  title: {
+    type: String,
+    required: [true, "Please add a title"],
+  },
   date: {
     type: Date,
     required: [true, "Please add a date"],
@@ -33,17 +36,29 @@ const EventSchema = new mongoose.Schema({
   },
   contactPhone: String,
   description: String,
-  expectedGuests: Number,
-  price: String,
+  expectedGuests: {
+    type: Number,
+    default: 0,
+  },
+  price: {
+    type: String,
+    default: "0",
+  },
   category: {
     type: String,
     enum: [
+      "Recital",
+      "Workshop",
+      "Competition",
+      "Special Class",
+      "Masterclass",
       "Welcome dance",
       "Wedding",
       "Dance choreography",
       "Functions",
       "Music videos",
       "Commercials backup dance",
+      "Other",
     ],
     default: "Other",
   },
@@ -55,6 +70,7 @@ const EventSchema = new mongoose.Schema({
   organizer: {
     type: mongoose.Schema.ObjectId,
     ref: "User",
+    required: true,
   },
   createdAt: {
     type: Date,

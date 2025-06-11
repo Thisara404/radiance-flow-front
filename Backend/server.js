@@ -29,23 +29,14 @@ app.get('/', (req, res) => {
   });
 });
 
-// Route files
-const authRoutes = require('./src/routes/authRoutes');
-const classRoutes = require('./src/routes/classRoutes');
-const instructorRoutes = require('./src/routes/instructorRoutes');
-const eventRoutes = require('./src/routes/eventRoutes');
-const enrollmentRoutes = require('./src/routes/enrollmentRoutes');
-const paymentRoutes = require('./src/routes/paymentRoutes');
-const userRoutes = require('./src/routes/userRoutes'); // New line added
-
-// Mount routes
-app.use('/api/auth', authRoutes);
-app.use('/api/classes', classRoutes);
-app.use('/api/instructors', instructorRoutes);
-app.use('/api/events', eventRoutes);
-app.use('/api/enrollments', enrollmentRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/users', userRoutes); // New line added
+// Make sure all routes are registered
+app.use('/api/auth', require('./src/routes/authRoutes'));
+app.use('/api/users', require('./src/routes/userRoutes'));
+app.use('/api/classes', require('./src/routes/classRoutes'));
+app.use('/api/instructors', require('./src/routes/instructorRoutes'));
+app.use('/api/events', require('./src/routes/eventRoutes'));
+app.use('/api/payments', require('./src/routes/paymentRoutes'));
+app.use('/api/enrollments', require('./src/routes/enrollmentRoutes'));
 
 // Handle undefined routes
 app.use('*', (req, res) => {

@@ -1,18 +1,22 @@
 import { useState, useEffect } from 'react';
-import { useAuth } from '../contexts/AuthContext';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
+import { useAuth } from '../contexts/AuthContext';
+import { CalendarDays, Clock, Users, DollarSign } from 'lucide-react';
 import Navbar from '../components/Navbar';
 import * as classService from '../services/classService';
-import * as enrollmentService from '../services/enrollmentService';
+import * as paymentService from '../services/paymentService';
 
 export default function Classes() {
   const { user, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [classes, setClasses] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [processingPayment, setProcessingPayment] = useState(null);
+  const [paidClasses, setPaidClasses] = useState([]);
 
   useEffect(() => {
     const fetchClasses = async () => {
@@ -20,24 +24,31 @@ export default function Classes() {
         setIsLoading(true);
         const response = await classService.getAllClasses();
         
-        // Format the classes data
-        const formattedClasses = response.data.map(cls => ({
-          id: cls._id,
-          name: cls.name,
-          instructor: cls.instructor?.name || 'Unassigned',
-          instructorId: cls.instructor?._id,
-          level: cls.level,
-          schedule: cls.schedule,
-          duration: cls.duration || '60 minutes',
-          price: cls.price,
-          description: cls.description || 'Join this exciting dance class!',
-          capacity: cls.capacity,
-          enrolled: cls.enrolledCount || 0,
-          availableSpots: cls.availableSpots || cls.capacity,
-          dayOfWeek: getDayFromSchedule(cls.schedule) // Helper function below
-        }));
+        if (response.success) {
+          // Format the classes data
+          const formattedClasses = response.data.map(cls => ({
+            id: cls._id,
+            name: cls.name,
+            instructor: cls.instructor?.name || cls.instructor || 'Unassigned',
+            instructorId: cls.instructor?._id,
+            level: cls.level,
+            schedule: cls.schedule,
+            duration: cls.duration || '60 minutes',
+            price: cls.price,
+            description: cls.description || 'Join this exciting dance class!',
+            capacity: cls.capacity || 20,
+            enrollments: cls.enrollments || 0,
+            availableSpots: (cls.capacity || 20) - (cls.enrollments || 0)
+          }));
+          
+          setClasses(formattedClasses);
+        }
         
-        setClasses(formattedClasses);
+        // Fetch paid classes if authenticated
+        if (isAuthenticated) {
+          await fetchPaidClasses();
+        }
+        
         setIsLoading(false);
       } catch (error) {
         console.error('Error fetching classes:', error);
@@ -51,7 +62,29 @@ export default function Classes() {
     };
 
     fetchClasses();
-  }, []);
+  }, [isAuthenticated]);
+
+  const fetchPaidClasses = async () => {
+    if (!isAuthenticated) return;
+    
+    try {
+      const response = await paymentService.getMyPaymentHistory();
+      
+      if (response.success) {
+        const paidClassIds = response.data
+          .filter(payment => 
+            payment.itemType === 'class' && 
+            payment.status === 'completed'
+          )
+          .map(payment => payment.itemId?._id);
+        
+        setPaidClasses(paidClassIds);
+        console.log('Paid classes:', paidClassIds); // Debug log
+      }
+    } catch (error) {
+      console.error('Error fetching paid classes:', error);
+    }
+  };
 
   // Helper function to extract day from schedule
   const getDayFromSchedule = (schedule) => {
@@ -82,56 +115,70 @@ export default function Classes() {
     return acc;
   }, {});
 
-// Update the handleEnroll function in Classes.tsx:
-
-// Handle enrollment
-const handleEnroll = async (classId) => {
-  if (!isAuthenticated) {
-    toast({
-      title: 'Login Required',
-      description: 'Please log in or register to enroll in classes',
-      variant: 'default'
-    });
-    navigate('/login?redirect=classes');
-    return;
-  }
-  
-  try {
-    setIsLoading(true);
-    const response = await enrollmentService.enrollInClass(classId);
-    
-    if (response.success) {
+  // Handle payment for class enrollment
+  const handlePayForClass = async (classInfo) => {
+    if (!isAuthenticated) {
       toast({
-        title: 'Success',
-        description: 'You have been enrolled in the class!'
+        title: 'Login Required',
+        description: 'Please log in to enroll in classes',
+        variant: 'default'
       });
-      
-      // Update the classes list to reflect enrollment
-      setClasses(classes.map(cls => {
-        if (cls.id === classId) {
-          return {
-            ...cls,
-            enrolled: cls.enrolled + 1,
-            availableSpots: cls.availableSpots - 1
-          };
-        }
-        return cls;
-      }));
-      
-      // Redirect to student dashboard after enrollment
-      navigate('/student-dashboard');
+      navigate('/login?redirect=classes');
+      return;
     }
-    setIsLoading(false);
-  } catch (error) {
-    console.error('Error enrolling in class:', error);
-    toast({
-      title: 'Error',
-      description: error.response?.data?.message || 'Failed to enroll in class',
-      variant: 'destructive'
-    });
-    setIsLoading(false);
-  }
-};
+    
+    try {
+      setProcessingPayment(classInfo.id);
+      
+      // Create payment order through payment service
+      const paymentResponse = await paymentService.payForClass(
+        classInfo.id, 
+        classInfo.price
+      );
+
+      if (paymentResponse.success) {
+        console.log('Redirecting to PayPal:', paymentResponse.data.approvalUrl);
+        // Redirect to PayPal
+        window.location.href = paymentResponse.data.approvalUrl;
+      } else {
+        throw new Error(paymentResponse.error || 'Failed to create payment');
+      }
+    } catch (error) {
+      console.error('Error processing payment:', error);
+      toast({
+        title: 'Error',
+        description: error.response?.data?.message || 'Failed to process payment',
+        variant: 'destructive'
+      });
+    } finally {
+      setProcessingPayment(null);
+    }
+  };
+
+  const getLevelColor = (level) => {
+    switch (level.toLowerCase()) {
+      case 'beginner':
+        return 'bg-green-100 text-green-800';
+      case 'intermediate':
+        return 'bg-yellow-100 text-yellow-800';
+      case 'advanced':
+        return 'bg-red-100 text-red-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getAvailabilityColor = (spots) => {
+    if (spots === 0) return 'bg-red-100 text-red-800';
+    if (spots < 5) return 'bg-yellow-100 text-yellow-800';
+    return 'bg-green-100 text-green-800';
+  };
+
+  const isClassPaid = (classId) => {
+    const isPaid = paidClasses.includes(classId);
+    console.log(`Class ${classId} is paid:`, isPaid); // Debug log
+    return isPaid;
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-orange-50">
@@ -140,60 +187,108 @@ const handleEnroll = async (classId) => {
       <div className="max-w-7xl mx-auto py-12 px-4">
         {/* Hero Section */}
         <div className="text-center mb-16">
-          <h1 className="text-4xl font-bold text-gray-800 mb-4">
-            Our Dance Classes
+          <h1 className="text-4xl font-bold text-gray-800 mb-6 bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
+            Dance Classes
           </h1>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-            Discover our variety of dance styles and levels. 
-            From beginners to advanced dancers, we have something for everyone!
+          <p className="text-xl text-gray-600 max-w-3xl mx-auto mb-8">
+            Discover your passion for dance with our expert instructors. From beginner-friendly sessions to advanced masterclasses, we have something for every dancer.
           </p>
         </div>
 
         {/* Classes by Level */}
         {isLoading ? (
-          <div className="flex justify-center items-center py-16">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-700"></div>
+          <div className="text-center py-12">
+            <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-purple-600 border-r-transparent"></div>
+            <p className="mt-4 text-gray-600">Loading classes...</p>
           </div>
         ) : (
-          Object.keys(classesByLevel).map(level => (
-            <div key={level} className="mb-16">
-              <h2 className="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">
-                {level} Level Classes
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {classesByLevel[level].map(classItem => (
-                  <Card key={classItem.id} className="overflow-hidden border-0 shadow-lg bg-white/80 backdrop-blur-sm">
-                    <div className="h-40 bg-gradient-to-r from-purple-400 to-pink-500 flex items-center justify-center">
-                      <h3 className="text-2xl font-bold text-white">{classItem.name}</h3>
-                    </div>
-                    <CardContent className="p-6">
-                      <div className="mb-4">
-                        <div className="flex justify-between items-center mb-2">
-                          <span className="text-sm font-medium text-purple-600">{classItem.level}</span>
-                          <span className="text-sm font-medium">{classItem.price}</span>
-                        </div>
-                        <h4 className="text-lg font-semibold mb-1">{classItem.name}</h4>
-                        <p className="text-gray-600 text-sm mb-2">Instructor: {classItem.instructor}</p>
-                      </div>
-                      
-                      <div className="text-gray-600 text-sm mb-4">
-                        <p><strong>Schedule:</strong> {classItem.schedule}</p>
-                        <p><strong>Duration:</strong> {classItem.duration}</p>
-                        <p><strong>Availability:</strong> {classItem.availableSpots}/{classItem.capacity} spots</p>
-                      </div>
-                      
-                      <p className="text-gray-700 mb-4 text-sm line-clamp-3">{classItem.description}</p>
+          Object.entries(classesByLevel).map(([level, levelClasses]) => (
+            <div key={level} className="mb-12">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center space-x-3">
+                  <h2 className="text-2xl font-bold text-gray-800">{level} Classes</h2>
+                  <Badge className={getLevelColor(level)}>{level}</Badge>
+                </div>
+                <p className="text-gray-600">{levelClasses.length} classes available</p>
+              </div>
 
-                      <Button 
-                        className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
-                        disabled={classItem.availableSpots === 0}
-                        onClick={() => handleEnroll(classItem.id)}
-                      >
-                        {classItem.availableSpots === 0 ? 'Class Full' : 'Enroll Now'}
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ))}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {levelClasses.map((classItem) => {
+                  const isPaid = isClassPaid(classItem.id);
+                  return (
+                    <Card key={classItem.id} className="bg-white/80 backdrop-blur-sm border-0 shadow-lg hover:shadow-xl transition-shadow">
+                      <CardHeader className="pb-3">
+                        <div className="flex justify-between items-start mb-2">
+                          <Badge className={getLevelColor(classItem.level)}>
+                            {classItem.level}
+                          </Badge>
+                          {isPaid && (
+                            <Badge className="bg-green-100 text-green-800">
+                              Paid ✓
+                            </Badge>
+                          )}
+                        </div>
+                        <CardTitle className="text-xl">{classItem.name}</CardTitle>
+                      </CardHeader>
+                      
+                      <CardContent className="space-y-4">
+                        <div className="space-y-2 text-sm">
+                          <div className="flex justify-between items-center">
+                            <strong>Instructor:</strong>
+                            <span>{classItem.instructor}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <strong>Schedule:</strong>
+                            <span>{classItem.schedule}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <strong>Duration:</strong>
+                            <span>{classItem.duration}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <strong>Price:</strong>
+                            <span className="font-bold text-purple-600">Rs. {classItem.price?.toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <strong>Availability:</strong>
+                            <Badge className={getAvailabilityColor(classItem.availableSpots)}>
+                              {classItem.availableSpots === 0 ? 'Full' : 
+                              `${classItem.availableSpots} spots left`}
+                            </Badge>
+                          </div>
+                        </div>
+                        
+                        <p className="text-gray-700 mb-4 text-sm line-clamp-3">{classItem.description}</p>
+
+                        {isPaid ? (
+                          <Button 
+                            className="w-full bg-green-600 hover:bg-green-700"
+                            disabled
+                          >
+                            Already Enrolled ✓
+                          </Button>
+                        ) : (
+                          <Button 
+                            className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+                            disabled={classItem.availableSpots === 0 || processingPayment === classItem.id}
+                            onClick={() => handlePayForClass(classItem)}
+                          >
+                            {processingPayment === classItem.id ? (
+                              <>
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                                Processing...
+                              </>
+                            ) : classItem.availableSpots === 0 ? (
+                              'Class Full'
+                            ) : (
+                              `Pay Rs. ${classItem.price?.toLocaleString()}`
+                            )}
+                          </Button>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
               </div>
             </div>
           ))
@@ -209,34 +304,38 @@ const handleEnroll = async (classId) => {
               <table className="w-full text-left">
                 <thead>
                   <tr className="border-b border-purple-100">
-                    <th className="py-3 px-4 font-semibold">Day</th>
-                    <th className="py-3 px-4 font-semibold">Time</th>
-                    <th className="py-3 px-4 font-semibold">Class</th>
-                    <th className="py-3 px-4 font-semibold">Instructor</th>
-                    <th className="py-3 px-4 font-semibold">Level</th>
-                    <th className="py-3 px-4 font-semibold">Availability</th>
+                    <th className="pb-3 font-semibold text-purple-800">Time</th>
+                    <th className="pb-3 font-semibold text-purple-800">Monday</th>
+                    <th className="pb-3 font-semibold text-purple-800">Tuesday</th>
+                    <th className="pb-3 font-semibold text-purple-800">Wednesday</th>
+                    <th className="pb-3 font-semibold text-purple-800">Thursday</th>
+                    <th className="pb-3 font-semibold text-purple-800">Friday</th>
+                    <th className="pb-3 font-semibold text-purple-800">Saturday</th>
+                    <th className="pb-3 font-semibold text-purple-800">Sunday</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {classes.map((classItem) => (
-                    <tr key={classItem.id} className="border-b border-gray-100">
-                      <td className="py-3 px-4 font-medium">{classItem.dayOfWeek}</td>
-                      <td className="py-3 px-4">{classItem.schedule.split(' ').slice(-3).join(' ')}</td>
-                      <td className="py-3 px-4">{classItem.name}</td>
-                      <td className="py-3 px-4">{classItem.instructor}</td>
-                      <td className="py-3 px-4">{classItem.level}</td>
-                      <td className="py-3 px-4">
-                        <span className={`px-2 py-1 rounded-full text-xs ${
-                          classItem.availableSpots === 0 ? 'bg-red-100 text-red-800' : 
-                          classItem.availableSpots < 5 ? 'bg-yellow-100 text-yellow-800' : 
-                          'bg-green-100 text-green-800'
-                        }`}>
-                          {classItem.availableSpots === 0 ? 'Full' : 
-                          `${classItem.availableSpots} spots left`}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {/* Schedule rows */}
+                  <tr className="border-b border-purple-50">
+                    <td className="py-3 font-medium">9:00 AM</td>
+                    <td className="py-3">Ballet Basics</td>
+                    <td className="py-3">-</td>
+                    <td className="py-3">Contemporary</td>
+                    <td className="py-3">-</td>
+                    <td className="py-3">Jazz Funk</td>
+                    <td className="py-3">Hip Hop</td>
+                    <td className="py-3">-</td>
+                  </tr>
+                  <tr className="border-b border-purple-50">
+                    <td className="py-3 font-medium">6:00 PM</td>
+                    <td className="py-3">Hip Hop</td>
+                    <td className="py-3">Bollywood</td>
+                    <td className="py-3">Ballet</td>
+                    <td className="py-3">Contemporary</td>
+                    <td className="py-3">Jazz</td>
+                    <td className="py-3">Latin Dance</td>
+                    <td className="py-3">Open Practice</td>
+                  </tr>
                 </tbody>
               </table>
             </div>
@@ -247,9 +346,9 @@ const handleEnroll = async (classId) => {
         <div className="text-center py-8">
           <h2 className="text-2xl font-bold text-gray-800 mb-4">Ready to start your dance journey?</h2>
           <div className="flex flex-col sm:flex-row justify-center gap-4">
-            <Link to="/register">
+            <Link to={isAuthenticated ? "/student-dashboard" : "/register"}>
               <Button size="lg" className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700">
-                Register Now
+                {isAuthenticated ? "Go to Dashboard" : "Register Now"}
               </Button>
             </Link>
             <Link to="/contact">

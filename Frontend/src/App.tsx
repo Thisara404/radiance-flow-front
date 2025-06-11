@@ -6,12 +6,13 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import StudentDashboard from "./pages/StudentDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
-// import OrganizerDashboard from "./pages/OrganizerDashboard";
 import Classes from "./pages/Classes";
 import Events from "./pages/Events";
-// import Instructors from "./pages/Instructors";
 import About from "./pages/About";
 import Contact from "./pages/Contact";
+import PaymentSuccess from "./pages/PaymentSuccess";
+import PaymentCancel from "./pages/PaymentCancel";
+import PaymentReturn from "./pages/PaymentReturn";
 import "./App.css";
 import NotFound from "./pages/NotFound";
 
@@ -62,9 +63,13 @@ function App() {
         <Route path="/register" element={<Register />} />
         <Route path="/classes" element={<Classes />} />
         <Route path="/events" element={<Events />} />
-        {/* <Route path="/instructors" element={<Instructors />} /> */}
         <Route path="/about" element={<About />} />
         <Route path="/contact" element={<Contact />} />
+        
+        {/* Payment routes */}
+        <Route path="/payment/success" element={<PaymentSuccess />} />
+        <Route path="/payment/cancel" element={<PaymentCancel />} />
+        <Route path="/payment/return" element={<PaymentReturn />} />
 
         {/* Protected routes */}
         <Route
@@ -83,14 +88,6 @@ function App() {
             </ProtectedRoute>
           }
         />
-        {/* <Route
-          path="/organizer-dashboard"
-          element={
-            <ProtectedRoute role="organizer">
-              <OrganizerDashboard />
-            </ProtectedRoute>
-          }
-        /> */}
 
         {/* 404 route */}
         <Route path="*" element={<NotFound />} />
